@@ -14,14 +14,11 @@
 #include <soc/dport_reg.h>
 #include <driver/gpio.h>
 #include <soc/gpio_sig_map.h>
-#include <esp_intr.h>
+#include <esp_intr_alloc.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <driver/rmt.h>
-
-#define ETS_RMT_CTRL_INUM	18
-#define ESP_RMT_CTRL_DISABLE	ESP_RMT_CTRL_DIABLE /* Typo in esp_intr.h */
 
 #define DIVIDER		4 /* Above 4, timings start to deviate*/
 #define DURATION	12.5 /* minimum time of a single RMT duration
@@ -35,8 +32,6 @@
 
 #define MAX_PULSES	32
 
-#define RMTCHANNEL	0
-
 typedef union {
   struct {
     uint32_t duration0:15;
@@ -47,9 +42,9 @@ typedef union {
   uint32_t val;
 } rmtPulsePair;
 
-static uint8_t *ws2812_buffer = NULL;
-static unsigned int ws2812_pos, ws2812_len, ws2812_half;
-static xSemaphoreHandle ws2812_sem = NULL;
+static uint8_t *ws2812_buffer[8] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+static unsigned int ws2812_pos[8], ws2812_len[8], ws2812_half[8];
+static xSemaphoreHandle ws2812_sem[8] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 static intr_handle_t rmt_intr_handle = NULL;
 static rmtPulsePair ws2812_bits[2];
 
@@ -73,38 +68,38 @@ void ws2812_initRMTChannel(int rmtChannel)
   return;
 }
 
-void ws2812_copy()
+void ws2812_copy(int RMTChannel)
 {
   unsigned int i, j, offset, len, bit;
 
 
-  offset = ws2812_half * MAX_PULSES;
-  ws2812_half = !ws2812_half;
+  offset = ws2812_half[RMTChannel] * MAX_PULSES;
+  ws2812_half[RMTChannel] = !ws2812_half[RMTChannel];
 
-  len = ws2812_len - ws2812_pos;
+  len = ws2812_len[RMTChannel] - ws2812_pos[RMTChannel];
   if (len > (MAX_PULSES / 8))
     len = (MAX_PULSES / 8);
 
   if (!len) {
     for (i = 0; i < MAX_PULSES; i++)
-      RMTMEM.chan[RMTCHANNEL].data32[i + offset].val = 0;
+      RMTMEM.chan[RMTChannel].data32[i + offset].val = 0;
     return;
   }
 
   for (i = 0; i < len; i++) {
-    bit = ws2812_buffer[i + ws2812_pos];
+    bit = ws2812_buffer[RMTChannel][i + ws2812_pos[RMTChannel]];
     for (j = 0; j < 8; j++, bit <<= 1) {
-      RMTMEM.chan[RMTCHANNEL].data32[j + i * 8 + offset].val =
+      RMTMEM.chan[RMTChannel].data32[j + i * 8 + offset].val =
 	ws2812_bits[(bit >> 7) & 0x01].val;
     }
-    if (i + ws2812_pos == ws2812_len - 1)
-      RMTMEM.chan[RMTCHANNEL].data32[7 + i * 8 + offset].duration1 = PULSE_TRS;
+    if (i + ws2812_pos[RMTChannel] == ws2812_len[RMTChannel] - 1)
+      RMTMEM.chan[RMTChannel].data32[7 + i * 8 + offset].duration1 = PULSE_TRS;
   }
 
   for (i *= 8; i < MAX_PULSES; i++)
-    RMTMEM.chan[RMTCHANNEL].data32[i + offset].val = 0;
+    RMTMEM.chan[RMTChannel].data32[i + offset].val = 0;
 
-  ws2812_pos += len;
+  ws2812_pos[RMTChannel] += len;
   return;
 }
 
@@ -114,29 +109,126 @@ void ws2812_handleInterrupt(void *arg)
 
 
   if (RMT.int_st.ch0_tx_thr_event) {
-    ws2812_copy();
+    ws2812_copy(0);
     RMT.int_clr.ch0_tx_thr_event = 1;
   }
-  else if (RMT.int_st.ch0_tx_end && ws2812_sem) {
-    xSemaphoreGiveFromISR(ws2812_sem, &taskAwoken);
+  else if (RMT.int_st.ch0_tx_end && ws2812_sem[0]) {
+    xSemaphoreGiveFromISR(ws2812_sem[0], &taskAwoken);
     RMT.int_clr.ch0_tx_end = 1;
+  }
+  if (RMT.int_st.ch1_tx_thr_event) {
+    ws2812_copy(1);
+    RMT.int_clr.ch1_tx_thr_event = 1;
+  }
+  else if (RMT.int_st.ch1_tx_end && ws2812_sem[1]) {
+    xSemaphoreGiveFromISR(ws2812_sem[1], &taskAwoken);
+    RMT.int_clr.ch1_tx_end = 1;
+  }
+  if (RMT.int_st.ch2_tx_thr_event) {
+    ws2812_copy(2);
+    RMT.int_clr.ch2_tx_thr_event = 1;
+  }
+  else if (RMT.int_st.ch2_tx_end && ws2812_sem[2]) {
+    xSemaphoreGiveFromISR(ws2812_sem[2], &taskAwoken);
+    RMT.int_clr.ch2_tx_end = 1;
+  }
+  if (RMT.int_st.ch3_tx_thr_event) {
+    ws2812_copy(3);
+    RMT.int_clr.ch3_tx_thr_event = 1;
+  }
+  else if (RMT.int_st.ch3_tx_end && ws2812_sem[3]) {
+    xSemaphoreGiveFromISR(ws2812_sem[3], &taskAwoken);
+    RMT.int_clr.ch3_tx_end = 1;
+  }
+  if (RMT.int_st.ch4_tx_thr_event) {
+    ws2812_copy(4);
+    RMT.int_clr.ch4_tx_thr_event = 1;
+  }
+  else if (RMT.int_st.ch4_tx_end && ws2812_sem[4]) {
+    xSemaphoreGiveFromISR(ws2812_sem[4], &taskAwoken);
+    RMT.int_clr.ch4_tx_end = 1;
+  }
+  if (RMT.int_st.ch5_tx_thr_event) {
+    ws2812_copy(5);
+    RMT.int_clr.ch5_tx_thr_event = 1;
+  }
+  else if (RMT.int_st.ch5_tx_end && ws2812_sem[5]) {
+    xSemaphoreGiveFromISR(ws2812_sem[5], &taskAwoken);
+    RMT.int_clr.ch5_tx_end = 1;
+  }
+  if (RMT.int_st.ch6_tx_thr_event) {
+    ws2812_copy(6);
+    RMT.int_clr.ch6_tx_thr_event = 1;
+  }
+  else if (RMT.int_st.ch6_tx_end && ws2812_sem[6]) {
+    xSemaphoreGiveFromISR(ws2812_sem[6], &taskAwoken);
+    RMT.int_clr.ch6_tx_end = 1;
+  }
+  if (RMT.int_st.ch7_tx_thr_event) {
+    ws2812_copy(7);
+    RMT.int_clr.ch7_tx_thr_event = 1;
+  }
+  else if (RMT.int_st.ch7_tx_end && ws2812_sem[7]) {
+    xSemaphoreGiveFromISR(ws2812_sem[7], &taskAwoken);
+    RMT.int_clr.ch7_tx_end = 1;
   }
 
   return;
 }
 
-void ws2812_init(int gpioNum)
+void ws2812_init(int gpioNum, int RMTChannel)
 {
   DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_RMT_CLK_EN);
   DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_RMT_RST);
 
-  rmt_set_pin((rmt_channel_t)RMTCHANNEL, RMT_MODE_TX, (gpio_num_t)gpioNum);
+  rmt_set_pin((rmt_channel_t)RMTChannel, RMT_MODE_TX, (gpio_num_t)gpioNum);
 
-  ws2812_initRMTChannel(RMTCHANNEL);
+  ws2812_initRMTChannel(RMTChannel);
 
-  RMT.tx_lim_ch[RMTCHANNEL].limit = MAX_PULSES;
-  RMT.int_ena.ch0_tx_thr_event = 1;
-  RMT.int_ena.ch0_tx_end = 1;
+  RMT.tx_lim_ch[RMTChannel].limit = MAX_PULSES;
+  switch(RMTChannel) {
+    case 0: {
+      RMT.int_ena.ch0_tx_thr_event = 1;
+      RMT.int_ena.ch0_tx_end = 1;
+      break;
+    }
+    case 1: {
+      RMT.int_ena.ch1_tx_thr_event = 1;
+      RMT.int_ena.ch1_tx_end = 1;
+      break;
+    }
+    case 2: {
+      RMT.int_ena.ch2_tx_thr_event = 1;
+      RMT.int_ena.ch2_tx_end = 1;
+      break;
+    }
+    case 3: {
+      RMT.int_ena.ch3_tx_thr_event = 1;
+      RMT.int_ena.ch3_tx_end = 1;
+      break;
+    }
+    case 4: {
+      RMT.int_ena.ch4_tx_thr_event = 1;
+      RMT.int_ena.ch4_tx_end = 1;
+      break;
+    }
+    case 5: {
+      RMT.int_ena.ch5_tx_thr_event = 1;
+      RMT.int_ena.ch5_tx_end = 1;
+      break;
+    }
+    case 6: {
+      RMT.int_ena.ch6_tx_thr_event = 1;
+      RMT.int_ena.ch6_tx_end = 1;
+      break;
+    }
+    case 7: {
+      RMT.int_ena.ch7_tx_thr_event = 1;
+      RMT.int_ena.ch7_tx_end = 1;
+      break;
+    }
+  }
+  
 
   ws2812_bits[0].level0 = 1;
   ws2812_bits[0].level1 = 0;
@@ -152,38 +244,37 @@ void ws2812_init(int gpioNum)
   return;
 }
 
-void ws2812_setColors(unsigned int length, rgbVal *array)
+void ws2812_setColors(unsigned int length, rgbVal *array, int RMTChannel)
 {
   unsigned int i;
 
-
-  ws2812_len = (length * 3) * sizeof(uint8_t);
-  ws2812_buffer = malloc(ws2812_len);
+  ws2812_len[RMTChannel] = (length * 3) * sizeof(uint8_t);
+  ws2812_buffer[RMTChannel] = malloc(ws2812_len[RMTChannel]);
 
   for (i = 0; i < length; i++) {
-    ws2812_buffer[0 + i * 3] = array[i].g;
-    ws2812_buffer[1 + i * 3] = array[i].r;
-    ws2812_buffer[2 + i * 3] = array[i].b;
+    ws2812_buffer[RMTChannel][0 + i * 3] = array[i].g;
+    ws2812_buffer[RMTChannel][1 + i * 3] = array[i].r;
+    ws2812_buffer[RMTChannel][2 + i * 3] = array[i].b;
   }
 
-  ws2812_pos = 0;
-  ws2812_half = 0;
+  ws2812_pos[RMTChannel] = 0;
+  ws2812_half[RMTChannel] = 0;
 
-  ws2812_copy();
+  ws2812_copy(RMTChannel);
 
-  if (ws2812_pos < ws2812_len)
-    ws2812_copy();
+  if (ws2812_pos[RMTChannel] < ws2812_len[RMTChannel])
+    ws2812_copy(RMTChannel);
 
-  ws2812_sem = xSemaphoreCreateBinary();
+  ws2812_sem[RMTChannel] = xSemaphoreCreateBinary();
 
-  RMT.conf_ch[RMTCHANNEL].conf1.mem_rd_rst = 1;
-  RMT.conf_ch[RMTCHANNEL].conf1.tx_start = 1;
+  RMT.conf_ch[RMTChannel].conf1.mem_rd_rst = 1;
+  RMT.conf_ch[RMTChannel].conf1.tx_start = 1;
 
-  xSemaphoreTake(ws2812_sem, portMAX_DELAY);
-  vSemaphoreDelete(ws2812_sem);
-  ws2812_sem = NULL;
+  xSemaphoreTake(ws2812_sem[RMTChannel], portMAX_DELAY);
+  vSemaphoreDelete(ws2812_sem[RMTChannel]);
+  ws2812_sem[RMTChannel] = NULL;
 
-  free(ws2812_buffer);
+  free(ws2812_buffer[RMTChannel]);
 
   return;
 }
